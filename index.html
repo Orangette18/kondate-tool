@@ -22,6 +22,10 @@
     .actions { display:flex; gap:8px; flex-wrap:wrap; }
     .small { font-size: 12px; padding: 6px 8px; }
     textarea { width: 100%; height: 120px; }
+
+    /* ★追加：アイコン表示 */
+    .icon { width: 22px; height: 22px; vertical-align: -5px; margin-right: 6px; }
+    .namecell { display:flex; align-items:center; gap:6px; }
   </style>
 </head>
 <body>
@@ -29,7 +33,8 @@
   <div class="muted">
     ✅ recipes.json を探して保存しなくてもOK（ネットから自動取得）<br>
     ✅ いちど取ったデータは iPhone に保存（次回は早い）<br>
-    ✅ レシピが増えても「🔄 最新データを読み込む」で対応
+    ✅ レシピが増えても「🔄 最新データを読み込む」で対応<br>
+    ✅ 日本語名は <code>ja.json</code> に追加すると増やせます
   </div>
 
   <div class="card">
@@ -121,10 +126,10 @@
   </div>
 
 <script>
-/** ====== 設定：ここが「今後のアップデート対応」のポイント ======
- *  このURLの中身が更新されたら、新しいレシピが自動で増えます。
- */
+/** ====== データ取得URL ====== */
 const RECIPES_URL = "https://raw.githubusercontent.com/EntropyBall/PokemonSleepAPI/master/data/recipes.json";
+const INGREDIENTS_URL = "https://raw.githubusercontent.com/EntropyBall/PokemonSleepAPI/master/data/ingredients.json";
+const JA_URL = "./ja.json"; // あなたのリポジトリに置いた辞書
 
 /** ====== 画面要素 ====== */
 const $ = (sel) => document.querySelector(sel);
@@ -137,9 +142,20 @@ const grandTotalEl = $("#grandTotal");
 const statusPill = $("#statusPill");
 const statusText = $("#statusText");
 
-/** ====== データ（カテゴリ配列） ====== */
-let data = []; // recipes.json の中身
-let plan = []; // 献立
+/** ====== データ ====== */
+let data = [];              // recipes.json
+let ingredientsData = [];   // ingredients.json
+let plan = [];              // 献立
+let ja = { categories:{}, recipes:{}, ingredients:{} };
+
+/** アイコンMap */
+const recipeIcon = new Map();      // レシピ名(英) -> iconURL
+const ingredientIcon = new Map();  // 食材名(英) -> iconURL
+
+/** 翻訳（辞書に無ければ英語のまま表示） */
+function tCategory(en){ return ja.categories?.[en] ?? en; }
+function tRecipe(en){ return ja.recipes?.[en] ?? en; }
+function tIng(en){ return ja.ingredients?.[en] ?? en; }
 
 function setStatus(ok, text) {
   statusPill.className = "pill " + (ok ? "ok" : "danger");
@@ -151,7 +167,8 @@ function normalizeCategoryTitle(t) { return t; }
 function safeIngredients(recipe) { return Array.isArray(recipe.ingredients) ? recipe.ingredients : []; }
 function ingredientText(ings) {
   if (!ings.length) return "（ごちゃまぜ / 材料未定義）";
-  return ings.map(i => `${i.name}×${i.quantity}`).join(", ");
+  // ★材料表示は日本語名にする
+  return ings.map(i => `${tIng(i.name)}×${i.quantity}`).join(", ");
 }
 
 function renderRecipeOptions() {
@@ -163,7 +180,7 @@ function renderRecipeOptions() {
   cat.recipes.forEach((r, idx) => {
     const opt = document.createElement("option");
     opt.value = String(idx);
-    opt.textContent = r.name;
+    opt.textContent = tRecipe(r.name);
     recipeSel.appendChild(opt);
   });
 }
@@ -173,7 +190,7 @@ function renderCategories() {
   data.forEach((c, idx) => {
     const opt = document.createElement("option");
     opt.value = String(idx);
-    opt.textContent = normalizeCategoryTitle(c.title);
+    opt.textContent = tCategory(normalizeCategoryTitle(c.title));
     categorySel.appendChild(opt);
   });
   renderRecipeOptions();
@@ -190,10 +207,25 @@ function renderPlan() {
     const tr = document.createElement("tr");
 
     const catTd = document.createElement("td");
-    catTd.textContent = item.cat;
+    catTd.textContent = tCategory(item.cat);
 
     const nameTd = document.createElement("td");
-    nameTd.textContent = item.recipeName;
+    nameTd.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "namecell";
+
+    const iconUrl = recipeIcon.get(item.recipeName);
+    if (iconUrl) {
+      const img = document.createElement("img");
+      img.src = iconUrl;
+      img.className = "icon";
+      img.alt = "";
+      wrap.appendChild(img);
+    }
+    const span = document.createElement("span");
+    span.textContent = tRecipe(item.recipeName);
+    wrap.appendChild(span);
+    nameTd.appendChild(wrap);
 
     const timesTd = document.createElement("td");
     timesTd.className = "right";
@@ -237,7 +269,7 @@ function computeSummary() {
       grand += q;
     }
   }
-  const rows = [...totals.entries()].sort((a,b) => a[0].localeCompare(b[0], "ja"));
+  const rows = [...totals.entries()].sort((a,b) => tIng(a[0]).localeCompare(tIng(b[0]), "ja"));
   return { rows, grand };
 }
 
@@ -248,11 +280,29 @@ function renderSummary() {
 
   for (const [name, qty] of rows) {
     const tr = document.createElement("tr");
+
     const nameTd = document.createElement("td");
-    nameTd.textContent = name;
+    nameTd.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "namecell";
+
+    const iconUrl = ingredientIcon.get(name);
+    if (iconUrl) {
+      const img = document.createElement("img");
+      img.src = iconUrl;
+      img.className = "icon";
+      img.alt = "";
+      wrap.appendChild(img);
+    }
+    const span = document.createElement("span");
+    span.textContent = tIng(name);
+    wrap.appendChild(span);
+    nameTd.appendChild(wrap);
+
     const qtyTd = document.createElement("td");
     qtyTd.className = "right";
     qtyTd.textContent = String(qty);
+
     tr.append(nameTd, qtyTd);
     sumBody.appendChild(tr);
   }
@@ -264,14 +314,15 @@ function toCSV() {
   const lines = [header.join(",")];
   for (const [name, qty] of rows) {
     const esc = (s) => `"${String(s).replaceAll('"','""')}"`;
-    lines.push([esc(name), String(qty)].join(","));
+    // CSVは「日本語名」にしておく
+    lines.push([esc(tIng(name)), String(qty)].join(","));
   }
   return lines.join("\n");
 }
 
 async function copySummary() {
   const { rows, grand } = computeSummary();
-  const text = `総食材数: ${grand}\n` + rows.map(([n,q]) => `${n}\t${q}`).join("\n");
+  const text = `総食材数: ${grand}\n` + rows.map(([n,q]) => `${tIng(n)}\t${q}`).join("\n");
   await navigator.clipboard.writeText(text);
   alert("コピーしました");
 }
@@ -289,17 +340,21 @@ function downloadCSV() {
   URL.revokeObjectURL(url);
 }
 
-/** ====== iPhoneに保存（キャッシュ）する仕組み ====== */
-const LS_KEY_DATA = "kondate_recipes_json_v1";
-const LS_KEY_DATA_TIME = "kondate_recipes_time_v1";
+/** ====== iPhoneに保存（キャッシュ） ====== */
+const LS_KEY_DATA = "kondate_recipes_json_v2";
+const LS_KEY_ING = "kondate_ingredients_json_v2";
+const LS_KEY_JA  = "kondate_ja_json_v2";
+const LS_KEY_DATA_TIME = "kondate_recipes_time_v2";
 const LS_KEY_PLAN = "kondate_plan_v1";
 
-function saveDataToLocalStorage(obj) {
-  localStorage.setItem(LS_KEY_DATA, JSON.stringify(obj));
+function saveAllToLocalStorage(recipes, ings, jaObj) {
+  localStorage.setItem(LS_KEY_DATA, JSON.stringify(recipes));
+  localStorage.setItem(LS_KEY_ING, JSON.stringify(ings));
+  localStorage.setItem(LS_KEY_JA,  JSON.stringify(jaObj));
   localStorage.setItem(LS_KEY_DATA_TIME, String(Date.now()));
 }
-function loadDataFromLocalStorage() {
-  const s = localStorage.getItem(LS_KEY_DATA);
+function loadJSON(key) {
+  const s = localStorage.getItem(key);
   if (!s) return null;
   try { return JSON.parse(s); } catch { return null; }
 }
@@ -317,29 +372,61 @@ function loadPlan() {
 }
 
 /** ====== ネットから最新データを取る（アップデート対応） ====== */
-async function fetchLatestRecipes() {
-  setStatus(true, "最新レシピを取得中…（ネットが必要です）");
-  const res = await fetch(RECIPES_URL, { cache: "no-store" });
-  if (!res.ok) throw new Error("ネットから取れませんでした");
-  const json = await res.json();
-  // 形チェック（最低限）
-  if (!Array.isArray(json) || !json.length) throw new Error("データの形が変です");
-  return json;
+async function fetchLatestAll() {
+  setStatus(true, "最新データを取得中…（ネットが必要です）");
+
+  const [rRes, iRes, jRes] = await Promise.all([
+    fetch(RECIPES_URL, { cache: "no-store" }),
+    fetch(INGREDIENTS_URL, { cache: "no-store" }),
+    fetch(JA_URL, { cache: "no-store" }).catch(() => null) // ja.jsonが無くても動く
+  ]);
+
+  if (!rRes.ok) throw new Error("recipes.json を取れませんでした");
+  if (!iRes.ok) throw new Error("ingredients.json を取れませんでした");
+
+  const recipesJson = await rRes.json();
+  const ingJson = await iRes.json();
+
+  let jaJson = { categories:{}, recipes:{}, ingredients:{} };
+  if (jRes && jRes.ok) {
+    try { jaJson = await jRes.json(); } catch {}
+  }
+
+  if (!Array.isArray(recipesJson) || !recipesJson.length) throw new Error("recipesの形が変です");
+  if (!Array.isArray(ingJson) || !ingJson.length) throw new Error("ingredientsの形が変です");
+
+  return { recipesJson, ingJson, jaJson };
+}
+
+function buildIconMaps() {
+  recipeIcon.clear();
+  for (const cat of data) {
+    for (const r of (cat.recipes ?? [])) {
+      if (r?.name && r?.imageSrc) recipeIcon.set(r.name, r.imageSrc);
+    }
+  }
+  ingredientIcon.clear();
+  for (const ing of ingredientsData) {
+    if (ing?.name && ing?.imageSrc) ingredientIcon.set(ing.name, ing.imageSrc);
+  }
 }
 
 function formatTime(ms) {
-  try {
-    const d = new Date(ms);
-    return d.toLocaleString("ja-JP");
-  } catch { return ""; }
+  try { return new Date(ms).toLocaleString("ja-JP"); } catch { return ""; }
 }
 
 async function init(tryOnlineFirst = false) {
-  // 1) まず保存済みがあればそれで表示（オフラインでも動く）
-  const cached = loadDataFromLocalStorage();
+  // 1) 保存済みがあればそれで表示（オフラインでも動く）
+  const cachedRecipes = loadJSON(LS_KEY_DATA);
+  const cachedIng = loadJSON(LS_KEY_ING);
+  const cachedJa = loadJSON(LS_KEY_JA);
   const savedTime = getSavedTime();
-  if (cached) {
-    data = cached;
+
+  if (cachedRecipes && cachedIng) {
+    data = cachedRecipes;
+    ingredientsData = cachedIng;
+    ja = cachedJa ?? { categories:{}, recipes:{}, ingredients:{} };
+    buildIconMaps();
     renderCategories();
     setStatus(true, `保存データで表示中（保存日時: ${savedTime ? formatTime(savedTime) : "不明"}）`);
   } else {
@@ -352,19 +439,23 @@ async function init(tryOnlineFirst = false) {
   renderSummary();
 
   // 3) ネットで最新を試す（レシピ追加にも対応）
-  //    tryOnlineFirst=true のときは「必ずネット取得」を優先
-  if (tryOnlineFirst || !cached) {
+  if (tryOnlineFirst || !(cachedRecipes && cachedIng)) {
     try {
-      const latest = await fetchLatestRecipes();
-      data = latest;
-      saveDataToLocalStorage(latest);
+      const all = await fetchLatestAll();
+      data = all.recipesJson;
+      ingredientsData = all.ingJson;
+      ja = all.jaJson;
+
+      buildIconMaps();
+      saveAllToLocalStorage(data, ingredientsData, ja);
+
       renderCategories();
       setStatus(true, `✅ 最新データに更新しました（取得: ${formatTime(Date.now())}）`);
       renderPlan();
       renderSummary();
     } catch (e) {
       console.error(e);
-      if (cached) {
+      if (cachedRecipes && cachedIng) {
         setStatus(false, "ネット取得に失敗。でも保存データで動いています（オフラインかも）");
       } else {
         setStatus(false, "ネット取得に失敗。下の「貼り付け」から読み込んでね。");
@@ -409,6 +500,8 @@ $("#refresh").addEventListener("click", () => init(true));
 $("#clearCache").addEventListener("click", () => {
   if (!confirm("保存したレシピデータと献立を消します。いい？")) return;
   localStorage.removeItem(LS_KEY_DATA);
+  localStorage.removeItem(LS_KEY_ING);
+  localStorage.removeItem(LS_KEY_JA);
   localStorage.removeItem(LS_KEY_DATA_TIME);
   localStorage.removeItem(LS_KEY_PLAN);
   alert("消しました。ページを開き直してね。");
@@ -421,7 +514,12 @@ $("#loadPaste").addEventListener("click", () => {
     const json = JSON.parse(t);
     if (!Array.isArray(json) || !json.length) throw new Error("形が変");
     data = json;
-    saveDataToLocalStorage(json);
+    // ingredients と ja は「保存があれば使う／なければ英語」
+    ingredientsData = loadJSON(LS_KEY_ING) ?? [];
+    ja = loadJSON(LS_KEY_JA) ?? { categories:{}, recipes:{}, ingredients:{} };
+    buildIconMaps();
+    saveAllToLocalStorage(data, ingredientsData, ja);
+
     renderCategories();
     setStatus(true, "✅ 貼り付けから読み込みOK（保存しました）");
   } catch (e) {
@@ -431,7 +529,7 @@ $("#loadPaste").addEventListener("click", () => {
   }
 });
 
-// 起動：保存データでまず表示 → そのあとネットで最新を取得
+// 起動
 init(false);
 </script>
 </body>
