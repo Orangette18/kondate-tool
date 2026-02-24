@@ -12,7 +12,7 @@
     button { cursor:pointer; }
     .card { border:1px solid #ddd; border-radius: 12px; padding: 12px; margin-top: 12px; }
     table { width:100%; border-collapse: collapse; }
-    th, td { border-bottom:1px solid #eee; padding: 8px; text-align:left; }
+    th, td { border-bottom:1px solid #eee; padding: 8px; text-align:left; vertical-align: top; }
     th { background:#fafafa; }
     .muted { opacity:.75; font-size: 12px; }
     .right { text-align:right; }
@@ -21,20 +21,17 @@
     .danger { border-color:#f2c2c2; background:#fff5f5; }
     .actions { display:flex; gap:8px; flex-wrap:wrap; }
     .small { font-size: 12px; padding: 6px 8px; }
-    textarea { width: 100%; height: 120px; }
-
-    /* ★追加：アイコン表示 */
-    .icon { width: 22px; height: 22px; vertical-align: -5px; margin-right: 6px; }
-    .namecell { display:flex; align-items:center; gap:6px; }
+    textarea { width: 100%; height: 140px; }
+    .namewrap { display:flex; gap:8px; align-items:center; }
+    .icon { width: 1.2em; text-align:center; }
   </style>
 </head>
 <body>
   <h1 style="margin:0 0 6px;">献立 → 食材合計計算ツール</h1>
   <div class="muted">
-    ✅ recipes.json を探して保存しなくてもOK（ネットから自動取得）<br>
     ✅ いちど取ったデータは iPhone に保存（次回は早い）<br>
     ✅ レシピが増えても「🔄 最新データを読み込む」で対応<br>
-    ✅ 日本語名は <code>ja.json</code> に追加すると増やせます
+    ✅ 日本語辞書は「📘 辞書を作る」で自動生成して ja.json に貼るだけ
   </div>
 
   <div class="card">
@@ -45,6 +42,7 @@
       </div>
       <div class="actions">
         <button id="refresh" class="small">🔄 最新データを読み込む</button>
+        <button id="makeDict" class="small">📘 辞書を作る</button>
         <button id="clearCache" class="small danger">🗑 保存データを消す</button>
       </div>
     </div>
@@ -126,10 +124,30 @@
   </div>
 
 <script>
-/** ====== データ取得URL ====== */
+/** ====== 設定（ここが「今後のアップデート対応」のポイント） ======
+ *  このURLの中身が更新されたら、新しいレシピが自動で増えます。
+ */
 const RECIPES_URL = "https://raw.githubusercontent.com/EntropyBall/PokemonSleepAPI/master/data/recipes.json";
-const INGREDIENTS_URL = "https://raw.githubusercontent.com/EntropyBall/PokemonSleepAPI/master/data/ingredients.json";
-const JA_URL = "./ja.json"; // あなたのリポジトリに置いた辞書
+
+/** アイコン用（英語名→絵文字）※分からないものは🥕 */
+const ING_EMOJI_FALLBACK = (name) => {
+  const n = String(name || "");
+  if (/Apple/i.test(n)) return "🍎";
+  if (/Egg/i.test(n)) return "🥚";
+  if (/Honey/i.test(n)) return "🍯";
+  if (/Potato/i.test(n)) return "🥔";
+  if (/Milk/i.test(n)) return "🥛";
+  if (/Soy|Bean/i.test(n)) return "🫘";
+  if (/Tomato/i.test(n)) return "🍅";
+  if (/Mushroom/i.test(n)) return "🍄";
+  if (/Cacao|Chocolate/i.test(n)) return "🍫";
+  if (/Ginger/i.test(n)) return "🫚";
+  if (/Herb|Leaf|Greens/i.test(n)) return "🥬";
+  return "🥕";
+};
+
+/** 日本語辞書（自分のGitHubに置いた ja.json） */
+const JA_URL = "./ja.json";
 
 /** ====== 画面要素 ====== */
 const $ = (sel) => document.querySelector(sel);
@@ -143,19 +161,10 @@ const statusPill = $("#statusPill");
 const statusText = $("#statusText");
 
 /** ====== データ ====== */
-let data = [];              // recipes.json
-let ingredientsData = [];   // ingredients.json
-let plan = [];              // 献立
-let ja = { categories:{}, recipes:{}, ingredients:{} };
-
-/** アイコンMap */
-const recipeIcon = new Map();      // レシピ名(英) -> iconURL
-const ingredientIcon = new Map();  // 食材名(英) -> iconURL
-
-/** 翻訳（辞書に無ければ英語のまま表示） */
-function tCategory(en){ return ja.categories?.[en] ?? en; }
-function tRecipe(en){ return ja.recipes?.[en] ?? en; }
-function tIng(en){ return ja.ingredients?.[en] ?? en; }
+let data = [];                 // recipes.json
+let plan = [];                 // 献立
+let ja = { categories:{}, recipes:{}, ingredients:{} }; // ja.json
+let ingEmojiMap = new Map();   // 食材→絵文字
 
 function setStatus(ok, text) {
   statusPill.className = "pill " + (ok ? "ok" : "danger");
@@ -163,11 +172,15 @@ function setStatus(ok, text) {
   statusText.textContent = text;
 }
 
-function normalizeCategoryTitle(t) { return t; }
+/** ====== 翻訳（ja.jsonがあれば日本語にする） ====== */
+function tCat(en){ return ja?.categories?.[en] || en; }
+function tRecipe(en){ return ja?.recipes?.[en] || en; }
+function tIng(en){ return ja?.ingredients?.[en] || en; }
+
+/** ====== 表示用 ====== */
 function safeIngredients(recipe) { return Array.isArray(recipe.ingredients) ? recipe.ingredients : []; }
 function ingredientText(ings) {
   if (!ings.length) return "（ごちゃまぜ / 材料未定義）";
-  // ★材料表示は日本語名にする
   return ings.map(i => `${tIng(i.name)}×${i.quantity}`).join(", ");
 }
 
@@ -190,15 +203,16 @@ function renderCategories() {
   data.forEach((c, idx) => {
     const opt = document.createElement("option");
     opt.value = String(idx);
-    opt.textContent = tCategory(normalizeCategoryTitle(c.title));
+    opt.textContent = tCat(c.title);
     categorySel.appendChild(opt);
   });
   renderRecipeOptions();
 }
 
-function findRecipe(catTitle, recipeName) {
-  const cat = data.find(c => normalizeCategoryTitle(c.title) === catTitle);
-  return cat?.recipes?.find(r => r.name === recipeName) ?? null;
+/** 英語名でレシピを探す（planは英語で保存する） */
+function findRecipeByEnglish(catEn, recipeEn) {
+  const cat = data.find(c => c.title === catEn);
+  return cat?.recipes?.find(r => r.name === recipeEn) ?? null;
 }
 
 function renderPlan() {
@@ -207,32 +221,25 @@ function renderPlan() {
     const tr = document.createElement("tr");
 
     const catTd = document.createElement("td");
-    catTd.textContent = tCategory(item.cat);
+    catTd.textContent = tCat(item.catEn);
 
     const nameTd = document.createElement("td");
-    nameTd.innerHTML = "";
-    const wrap = document.createElement("div");
-    wrap.className = "namecell";
-
-    const iconUrl = recipeIcon.get(item.recipeName);
-    if (iconUrl) {
-      const img = document.createElement("img");
-      img.src = iconUrl;
-      img.className = "icon";
-      img.alt = "";
-      wrap.appendChild(img);
-    }
-    const span = document.createElement("span");
-    span.textContent = tRecipe(item.recipeName);
-    wrap.appendChild(span);
-    nameTd.appendChild(wrap);
+    const nameWrap = document.createElement("div");
+    nameWrap.className = "namewrap";
+    const icon = document.createElement("span");
+    icon.className = "icon";
+    icon.textContent = "🍽️"; // レシピ用アイコン
+    const text = document.createElement("span");
+    text.textContent = tRecipe(item.recipeEn);
+    nameWrap.append(icon, text);
+    nameTd.appendChild(nameWrap);
 
     const timesTd = document.createElement("td");
     timesTd.className = "right";
     timesTd.textContent = String(item.times);
 
     const ingTd = document.createElement("td");
-    const recipe = findRecipe(item.cat, item.recipeName);
+    const recipe = findRecipeByEnglish(item.catEn, item.recipeEn);
     ingTd.textContent = recipe ? ingredientText(safeIngredients(recipe)) : "（不明）";
 
     const actTd = document.createElement("td");
@@ -258,7 +265,7 @@ function computeSummary() {
   let grand = 0;
 
   for (const item of plan) {
-    const recipe = findRecipe(item.cat, item.recipeName);
+    const recipe = findRecipeByEnglish(item.catEn, item.recipeEn);
     if (!recipe) continue;
     const ings = safeIngredients(recipe);
 
@@ -269,7 +276,7 @@ function computeSummary() {
       grand += q;
     }
   }
-  const rows = [...totals.entries()].sort((a,b) => tIng(a[0]).localeCompare(tIng(b[0]), "ja"));
+  const rows = [...totals.entries()].sort((a,b) => a[0].localeCompare(b[0], "en"));
   return { rows, grand };
 }
 
@@ -278,25 +285,21 @@ function renderSummary() {
   sumBody.innerHTML = "";
   grandTotalEl.textContent = String(grand);
 
-  for (const [name, qty] of rows) {
+  for (const [nameEn, qty] of rows) {
     const tr = document.createElement("tr");
 
     const nameTd = document.createElement("td");
-    nameTd.innerHTML = "";
     const wrap = document.createElement("div");
-    wrap.className = "namecell";
+    wrap.className = "namewrap";
 
-    const iconUrl = ingredientIcon.get(name);
-    if (iconUrl) {
-      const img = document.createElement("img");
-      img.src = iconUrl;
-      img.className = "icon";
-      img.alt = "";
-      wrap.appendChild(img);
-    }
-    const span = document.createElement("span");
-    span.textContent = tIng(name);
-    wrap.appendChild(span);
+    const icon = document.createElement("span");
+    icon.className = "icon";
+    icon.textContent = ingEmojiMap.get(nameEn) ?? ING_EMOJI_FALLBACK(nameEn);
+
+    const txt = document.createElement("span");
+    txt.textContent = tIng(nameEn);
+
+    wrap.append(icon, txt);
     nameTd.appendChild(wrap);
 
     const qtyTd = document.createElement("td");
@@ -314,7 +317,6 @@ function toCSV() {
   const lines = [header.join(",")];
   for (const [name, qty] of rows) {
     const esc = (s) => `"${String(s).replaceAll('"','""')}"`;
-    // CSVは「日本語名」にしておく
     lines.push([esc(tIng(name)), String(qty)].join(","));
   }
   return lines.join("\n");
@@ -342,120 +344,153 @@ function downloadCSV() {
 
 /** ====== iPhoneに保存（キャッシュ） ====== */
 const LS_KEY_DATA = "kondate_recipes_json_v2";
-const LS_KEY_ING = "kondate_ingredients_json_v2";
-const LS_KEY_JA  = "kondate_ja_json_v2";
 const LS_KEY_DATA_TIME = "kondate_recipes_time_v2";
-const LS_KEY_PLAN = "kondate_plan_v1";
+const LS_KEY_PLAN = "kondate_plan_v2";
+const LS_KEY_JA = "kondate_ja_v2";
 
-function saveAllToLocalStorage(recipes, ings, jaObj) {
-  localStorage.setItem(LS_KEY_DATA, JSON.stringify(recipes));
-  localStorage.setItem(LS_KEY_ING, JSON.stringify(ings));
-  localStorage.setItem(LS_KEY_JA,  JSON.stringify(jaObj));
-  localStorage.setItem(LS_KEY_DATA_TIME, String(Date.now()));
-}
-function loadJSON(key) {
+function saveJSON(key, obj){ localStorage.setItem(key, JSON.stringify(obj)); }
+function loadJSON(key){
   const s = localStorage.getItem(key);
   if (!s) return null;
   try { return JSON.parse(s); } catch { return null; }
 }
+function saveDataToLocalStorage(obj) {
+  saveJSON(LS_KEY_DATA, obj);
+  localStorage.setItem(LS_KEY_DATA_TIME, String(Date.now()));
+}
+function loadDataFromLocalStorage() { return loadJSON(LS_KEY_DATA); }
 function getSavedTime() {
   const t = Number(localStorage.getItem(LS_KEY_DATA_TIME));
   return Number.isFinite(t) ? t : null;
 }
-function savePlan() {
-  localStorage.setItem(LS_KEY_PLAN, JSON.stringify(plan));
-}
-function loadPlan() {
-  const s = localStorage.getItem(LS_KEY_PLAN);
-  if (!s) return [];
-  try { return JSON.parse(s) ?? []; } catch { return []; }
-}
-
-/** ====== ネットから最新データを取る（アップデート対応） ====== */
-async function fetchLatestAll() {
-  setStatus(true, "最新データを取得中…（ネットが必要です）");
-
-  const [rRes, iRes, jRes] = await Promise.all([
-    fetch(RECIPES_URL, { cache: "no-store" }),
-    fetch(INGREDIENTS_URL, { cache: "no-store" }),
-    fetch(JA_URL, { cache: "no-store" }).catch(() => null) // ja.jsonが無くても動く
-  ]);
-
-  if (!rRes.ok) throw new Error("recipes.json を取れませんでした");
-  if (!iRes.ok) throw new Error("ingredients.json を取れませんでした");
-
-  const recipesJson = await rRes.json();
-  const ingJson = await iRes.json();
-
-  let jaJson = { categories:{}, recipes:{}, ingredients:{} };
-  if (jRes && jRes.ok) {
-    try { jaJson = await jRes.json(); } catch {}
-  }
-
-  if (!Array.isArray(recipesJson) || !recipesJson.length) throw new Error("recipesの形が変です");
-  if (!Array.isArray(ingJson) || !ingJson.length) throw new Error("ingredientsの形が変です");
-
-  return { recipesJson, ingJson, jaJson };
-}
-
-function buildIconMaps() {
-  recipeIcon.clear();
-  for (const cat of data) {
-    for (const r of (cat.recipes ?? [])) {
-      if (r?.name && r?.imageSrc) recipeIcon.set(r.name, r.imageSrc);
-    }
-  }
-  ingredientIcon.clear();
-  for (const ing of ingredientsData) {
-    if (ing?.name && ing?.imageSrc) ingredientIcon.set(ing.name, ing.imageSrc);
-  }
-}
+function savePlan() { saveJSON(LS_KEY_PLAN, plan); }
+function loadPlan() { return loadJSON(LS_KEY_PLAN) ?? []; }
+function saveJaToLocalStorage(obj){ saveJSON(LS_KEY_JA, obj); }
+function loadJaFromLocalStorage(){ return loadJSON(LS_KEY_JA); }
 
 function formatTime(ms) {
   try { return new Date(ms).toLocaleString("ja-JP"); } catch { return ""; }
 }
 
+/** ====== ネットから取得（アップデート対応） ====== */
+async function fetchLatestRecipes() {
+  setStatus(true, "最新レシピを取得中…（ネットが必要です）");
+  const res = await fetch(RECIPES_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error("recipes.json をネットから取れませんでした");
+  const json = await res.json();
+  if (!Array.isArray(json) || !json.length) throw new Error("recipes.json の形が変です");
+  return json;
+}
+
+/** ja.json を取りに行く（自分のGitHub Pagesに置いたもの） */
+async function fetchJa() {
+  try {
+    const res = await fetch(JA_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("ja.json が見つからない");
+    const j = await res.json();
+    if (!j || typeof j !== "object") throw new Error("ja.json が変");
+    return {
+      categories: j.categories ?? {},
+      recipes: j.recipes ?? {},
+      ingredients: j.ingredients ?? {}
+    };
+  } catch {
+    return { categories:{}, recipes:{}, ingredients:{} };
+  }
+}
+
+/** アイコン用：ここは「とりあえず絵文字」で作る（確実に動く） */
+function rebuildIconMapFromData() {
+  ingEmojiMap = new Map();
+  for (const c of (data ?? [])) {
+    for (const r of (c?.recipes ?? [])) {
+      for (const ing of (r?.ingredients ?? [])) {
+        if (ing?.name && !ingEmojiMap.has(ing.name)) {
+          ingEmojiMap.set(ing.name, ING_EMOJI_FALLBACK(ing.name));
+        }
+      }
+    }
+  }
+}
+
+/** ====== 辞書テンプレを作る（B案） ====== */
+function buildJaTemplate() {
+  const out = { categories: {}, recipes: {}, ingredients: {} };
+
+  for (const c of (data ?? [])) {
+    if (c?.title) out.categories[c.title] = out.categories[c.title] ?? "";
+  }
+  for (const c of (data ?? [])) {
+    for (const r of (c?.recipes ?? [])) {
+      if (r?.name) out.recipes[r.name] = out.recipes[r.name] ?? "";
+      for (const ing of (r?.ingredients ?? [])) {
+        if (ing?.name) out.ingredients[ing.name] = out.ingredients[ing.name] ?? "";
+      }
+    }
+  }
+
+  const sortObj = (obj) => Object.fromEntries(
+    Object.keys(obj).sort((a,b)=>a.localeCompare(b,"en")).map(k=>[k,obj[k]])
+  );
+  out.categories = sortObj(out.categories);
+  out.recipes = sortObj(out.recipes);
+  out.ingredients = sortObj(out.ingredients);
+  return out;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    alert("コピーしました！\nGitHubの ja.json に貼り付けてOKです。");
+  } catch {
+    // クリップボードがダメな時は、promptで出す
+    prompt("この内容をコピーして ja.json に貼ってね", text);
+  }
+}
+
+/** ====== 起動 ====== */
 async function init(tryOnlineFirst = false) {
-  // 1) 保存済みがあればそれで表示（オフラインでも動く）
-  const cachedRecipes = loadJSON(LS_KEY_DATA);
-  const cachedIng = loadJSON(LS_KEY_ING);
-  const cachedJa = loadJSON(LS_KEY_JA);
+  // 1) キャッシュ読み込み
+  const cached = loadDataFromLocalStorage();
   const savedTime = getSavedTime();
 
-  if (cachedRecipes && cachedIng) {
-    data = cachedRecipes;
-    ingredientsData = cachedIng;
-    ja = cachedJa ?? { categories:{}, recipes:{}, ingredients:{} };
-    buildIconMaps();
+  // 2) ja（まず保存→次にネットのja.json）
+  ja = loadJaFromLocalStorage() ?? { categories:{}, recipes:{}, ingredients:{} };
+  const jaFromNet = await fetchJa();
+  // ネットのja.jsonが空じゃないなら上書きして保存
+  if (jaFromNet && (Object.keys(jaFromNet.categories).length || Object.keys(jaFromNet.recipes).length || Object.keys(jaFromNet.ingredients).length)) {
+    ja = jaFromNet;
+    saveJaToLocalStorage(ja);
+  }
+
+  if (cached) {
+    data = cached;
+    rebuildIconMapFromData();
     renderCategories();
     setStatus(true, `保存データで表示中（保存日時: ${savedTime ? formatTime(savedTime) : "不明"}）`);
   } else {
     setStatus(false, "保存データなし。ネットで最新を取得します。");
   }
 
-  // 2) 献立も復元
+  // 3) 献立復元
   plan = loadPlan();
   renderPlan();
   renderSummary();
 
-  // 3) ネットで最新を試す（レシピ追加にも対応）
-  if (tryOnlineFirst || !(cachedRecipes && cachedIng)) {
+  // 4) ネットで最新
+  if (tryOnlineFirst || !cached) {
     try {
-      const all = await fetchLatestAll();
-      data = all.recipesJson;
-      ingredientsData = all.ingJson;
-      ja = all.jaJson;
-
-      buildIconMaps();
-      saveAllToLocalStorage(data, ingredientsData, ja);
-
+      const latest = await fetchLatestRecipes();
+      data = latest;
+      saveDataToLocalStorage(latest);
+      rebuildIconMapFromData();
       renderCategories();
       setStatus(true, `✅ 最新データに更新しました（取得: ${formatTime(Date.now())}）`);
       renderPlan();
       renderSummary();
     } catch (e) {
       console.error(e);
-      if (cachedRecipes && cachedIng) {
+      if (cached) {
         setStatus(false, "ネット取得に失敗。でも保存データで動いています（オフラインかも）");
       } else {
         setStatus(false, "ネット取得に失敗。下の「貼り付け」から読み込んでね。");
@@ -476,7 +511,8 @@ $("#add").addEventListener("click", () => {
   if (!cat || !recipe) return;
 
   const times = Math.max(1, Math.min(99, Number(timesInput.value || 1)));
-  plan.push({ cat: normalizeCategoryTitle(cat.title), recipeName: recipe.name, times });
+  // ★英語で保存（そうするとレシピ更新に強い）
+  plan.push({ catEn: cat.title, recipeEn: recipe.name, times });
   renderPlan();
   renderSummary();
   savePlan();
@@ -498,12 +534,11 @@ $("#download").addEventListener("click", downloadCSV);
 $("#refresh").addEventListener("click", () => init(true));
 
 $("#clearCache").addEventListener("click", () => {
-  if (!confirm("保存したレシピデータと献立を消します。いい？")) return;
+  if (!confirm("保存したレシピデータ・日本語辞書・献立を消します。いい？")) return;
   localStorage.removeItem(LS_KEY_DATA);
-  localStorage.removeItem(LS_KEY_ING);
-  localStorage.removeItem(LS_KEY_JA);
   localStorage.removeItem(LS_KEY_DATA_TIME);
   localStorage.removeItem(LS_KEY_PLAN);
+  localStorage.removeItem(LS_KEY_JA);
   alert("消しました。ページを開き直してね。");
 });
 
@@ -514,19 +549,24 @@ $("#loadPaste").addEventListener("click", () => {
     const json = JSON.parse(t);
     if (!Array.isArray(json) || !json.length) throw new Error("形が変");
     data = json;
-    // ingredients と ja は「保存があれば使う／なければ英語」
-    ingredientsData = loadJSON(LS_KEY_ING) ?? [];
-    ja = loadJSON(LS_KEY_JA) ?? { categories:{}, recipes:{}, ingredients:{} };
-    buildIconMaps();
-    saveAllToLocalStorage(data, ingredientsData, ja);
-
+    saveDataToLocalStorage(json);
+    rebuildIconMapFromData();
     renderCategories();
     setStatus(true, "✅ 貼り付けから読み込みOK（保存しました）");
+    renderPlan();
+    renderSummary();
   } catch (e) {
     console.error(e);
     alert("JSONの読み込みに失敗したよ");
     setStatus(false, "貼り付け読み込みに失敗");
   }
+});
+
+$("#makeDict").addEventListener("click", async () => {
+  if (!data?.length) { alert("先に「🔄 最新データを読み込む」を押してね"); return; }
+  const tmpl = buildJaTemplate();
+  const jsonText = JSON.stringify(tmpl, null, 2);
+  await copyText(jsonText);
 });
 
 // 起動
