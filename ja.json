@@ -2,8 +2,16 @@
   "categories": {
     "Curry": "カレー",
     "Salads": "サラダ",
-    "Desserts": "デザート"
+    "Desserts": "デザート",
+    "Drinks": "ドリンク"
   },
-  "recipes": {},
-  "ingredients": {}
+  "recipes": {
+    "Egg Bomb Curry": "たまごボムカレー"
+  },
+  "ingredients": {
+    "Fancy Apple": "とくせんリンゴ",
+    "Fancy Egg": "とくせんエッグ",
+    "Honey": "あまいミツ",
+    "Soft Potato": "ほっこりポテト"
+  }
 }
