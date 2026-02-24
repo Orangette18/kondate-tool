@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>献立 → 食材合計計算ツール</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; line-height: 1.35; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; align-items: end; }
+    label { display:block; font-size: 12px; opacity:.8; margin-bottom: 4px; }
+    select, input, button, textarea { padding: 8px 10px; font-size: 14px; }
+    button { cursor:pointer; }
+    .card { border:1px solid #ddd; border-radius: 12px; padding: 12px; margin-top: 12px; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid #eee; padding: 8px; text-align:left; }
+    th { background:#fafafa; }
+    .muted { opacity:.75; font-size: 12px; }
+    .right { text-align:right; }
+    .pill { display:inline-block; padding: 2px 8px; border:1px solid #ddd; border-radius: 999px; font-size: 12px; }
+    .ok { border-color:#bfe7c8; background:#f4fff6; }
+    .danger { border-color:#f2c2c2; background:#fff5f5; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .small { font-size: 12px; padding: 6px 8px; }
+    textarea { width: 100%; height: 120px; }
+  </style>
+</head>
+<body>
+  <h1 style="margin:0 0 6px;">献立 → 食材合計計算ツール</h1>
+  <div class="muted">
+    ✅ recipes.json を探して保存しなくてもOK（ネットから自動取得）<br>
+    ✅ いちど取ったデータは iPhone に保存（次回は早い）<br>
+    ✅ レシピが増えても「🔄 最新データを読み込む」で対応
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <div>
+        <div class="pill ok" id="statusPill">準備中…</div>
+        <div class="muted" id="statusText" style="margin-top:6px;"></div>
+      </div>
+      <div class="actions">
+        <button id="refresh" class="small">🔄 最新データを読み込む</button>
+        <button id="clearCache" class="small danger">🗑 保存データを消す</button>
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+
+    <div class="row">
+      <div>
+        <label>カテゴリ</label>
+        <select id="category"></select>
+      </div>
+      <div style="min-width: 260px;">
+        <label>レシピ</label>
+        <select id="recipe"></select>
+      </div>
+      <div>
+        <label>回数</label>
+        <input id="times" type="number" min="1" max="99" value="1" style="width:90px;" />
+      </div>
+      <div class="actions">
+        <button id="add" class="ok">追加</button>
+        <button id="clearAll" class="danger">全クリア</button>
+      </div>
+    </div>
+
+    <div class="muted" style="margin-top:8px;">
+      ※「Mixed Curry / Mixed Salad」など材料が定義されないものは集計対象外（=ごちゃまぜ）として扱います。
+    </div>
+
+    <details style="margin-top:12px;">
+      <summary class="muted">（もしネットがダメなら）JSONを貼り付けて読み込む</summary>
+      <div style="margin-top:8px;">
+        <textarea id="pasteArea" placeholder="recipes.json の中身をここに貼り付け"></textarea>
+        <div class="actions" style="margin-top:8px;">
+          <button id="loadPaste" class="small">📥 貼り付けから読み込む</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2 style="margin:0 0 8px; font-size: 16px;">献立リスト</h2>
+    <table id="planTable">
+      <thead>
+        <tr>
+          <th>カテゴリ</th>
+          <th>レシピ</th>
+          <th class="right">回数</th>
+          <th>材料（1回あたり）</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted" style="margin-top:8px;">行を消すと自動で合計が更新されます。</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between;">
+      <h2 style="margin:0; font-size: 16px;">食材 合計</h2>
+      <div class="actions">
+        <button id="copy" class="small">コピー</button>
+        <button id="download" class="small">CSV出力</button>
+      </div>
+    </div>
+    <div style="margin-top:10px;">
+      <div class="pill">総食材数（合計個数）: <span id="grandTotal">0</span></div>
+    </div>
+
+    <table id="sumTable" style="margin-top:10px;">
+      <thead>
+        <tr>
+          <th>食材</th>
+          <th class="right">合計</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+/** ====== 設定：ここが「今後のアップデート対応」のポイント ======
+ *  このURLの中身が更新されたら、新しいレシピが自動で増えます。
+ */
+const RECIPES_URL = "https://raw.githubusercontent.com/EntropyBall/PokemonSleepAPI/master/data/recipes.json";
+
+/** ====== 画面要素 ====== */
+const $ = (sel) => document.querySelector(sel);
+const categorySel = $("#category");
+const recipeSel = $("#recipe");
+const timesInput = $("#times");
+const planBody = $("#planTable tbody");
+const sumBody = $("#sumTable tbody");
+const grandTotalEl = $("#grandTotal");
+const statusPill = $("#statusPill");
+const statusText = $("#statusText");
+
+/** ====== データ（カテゴリ配列） ====== */
+let data = []; // recipes.json の中身
+let plan = []; // 献立
+
+function setStatus(ok, text) {
+  statusPill.className = "pill " + (ok ? "ok" : "danger");
+  statusPill.textContent = ok ? "OK" : "注意";
+  statusText.textContent = text;
+}
+
+function normalizeCategoryTitle(t) { return t; }
+function safeIngredients(recipe) { return Array.isArray(recipe.ingredients) ? recipe.ingredients : []; }
+function ingredientText(ings) {
+  if (!ings.length) return "（ごちゃまぜ / 材料未定義）";
+  return ings.map(i => `${i.name}×${i.quantity}`).join(", ");
+}
+
+function renderRecipeOptions() {
+  recipeSel.innerHTML = "";
+  const catIdx = Number(categorySel.value);
+  const cat = data[catIdx];
+  if (!cat || !Array.isArray(cat.recipes)) return;
+
+  cat.recipes.forEach((r, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    opt.textContent = r.name;
+    recipeSel.appendChild(opt);
+  });
+}
+
+function renderCategories() {
+  categorySel.innerHTML = "";
+  data.forEach((c, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    opt.textContent = normalizeCategoryTitle(c.title);
+    categorySel.appendChild(opt);
+  });
+  renderRecipeOptions();
+}
+
+function findRecipe(catTitle, recipeName) {
+  const cat = data.find(c => normalizeCategoryTitle(c.title) === catTitle);
+  return cat?.recipes?.find(r => r.name === recipeName) ?? null;
+}
+
+function renderPlan() {
+  planBody.innerHTML = "";
+  plan.forEach((item, idx) => {
+    const tr = document.createElement("tr");
+
+    const catTd = document.createElement("td");
+    catTd.textContent = item.cat;
+
+    const nameTd = document.createElement("td");
+    nameTd.textContent = item.recipeName;
+
+    const timesTd = document.createElement("td");
+    timesTd.className = "right";
+    timesTd.textContent = String(item.times);
+
+    const ingTd = document.createElement("td");
+    const recipe = findRecipe(item.cat, item.recipeName);
+    ingTd.textContent = recipe ? ingredientText(safeIngredients(recipe)) : "（不明）";
+
+    const actTd = document.createElement("td");
+    actTd.className = "right";
+    const btn = document.createElement("button");
+    btn.textContent = "削除";
+    btn.className = "small";
+    btn.onclick = () => {
+      plan.splice(idx, 1);
+      renderPlan();
+      renderSummary();
+      savePlan();
+    };
+    actTd.appendChild(btn);
+
+    tr.append(catTd, nameTd, timesTd, ingTd, actTd);
+    planBody.appendChild(tr);
+  });
+}
+
+function computeSummary() {
+  const totals = new Map();
+  let grand = 0;
+
+  for (const item of plan) {
+    const recipe = findRecipe(item.cat, item.recipeName);
+    if (!recipe) continue;
+    const ings = safeIngredients(recipe);
+
+    for (const ing of ings) {
+      const q = Number(ing.quantity) * item.times;
+      if (!Number.isFinite(q)) continue;
+      totals.set(ing.name, (totals.get(ing.name) ?? 0) + q);
+      grand += q;
+    }
+  }
+  const rows = [...totals.entries()].sort((a,b) => a[0].localeCompare(b[0], "ja"));
+  return { rows, grand };
+}
+
+function renderSummary() {
+  const { rows, grand } = computeSummary();
+  sumBody.innerHTML = "";
+  grandTotalEl.textContent = String(grand);
+
+  for (const [name, qty] of rows) {
+    const tr = document.createElement("tr");
+    const nameTd = document.createElement("td");
+    nameTd.textContent = name;
+    const qtyTd = document.createElement("td");
+    qtyTd.className = "right";
+    qtyTd.textContent = String(qty);
+    tr.append(nameTd, qtyTd);
+    sumBody.appendChild(tr);
+  }
+}
+
+function toCSV() {
+  const { rows } = computeSummary();
+  const header = ["ingredient", "total"];
+  const lines = [header.join(",")];
+  for (const [name, qty] of rows) {
+    const esc = (s) => `"${String(s).replaceAll('"','""')}"`;
+    lines.push([esc(name), String(qty)].join(","));
+  }
+  return lines.join("\n");
+}
+
+async function copySummary() {
+  const { rows, grand } = computeSummary();
+  const text = `総食材数: ${grand}\n` + rows.map(([n,q]) => `${n}\t${q}`).join("\n");
+  await navigator.clipboard.writeText(text);
+  alert("コピーしました");
+}
+
+function downloadCSV() {
+  const csv = toCSV();
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ingredients_total.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** ====== iPhoneに保存（キャッシュ）する仕組み ====== */
+const LS_KEY_DATA = "kondate_recipes_json_v1";
+const LS_KEY_DATA_TIME = "kondate_recipes_time_v1";
+const LS_KEY_PLAN = "kondate_plan_v1";
+
+function saveDataToLocalStorage(obj) {
+  localStorage.setItem(LS_KEY_DATA, JSON.stringify(obj));
+  localStorage.setItem(LS_KEY_DATA_TIME, String(Date.now()));
+}
+function loadDataFromLocalStorage() {
+  const s = localStorage.getItem(LS_KEY_DATA);
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
+function getSavedTime() {
+  const t = Number(localStorage.getItem(LS_KEY_DATA_TIME));
+  return Number.isFinite(t) ? t : null;
+}
+function savePlan() {
+  localStorage.setItem(LS_KEY_PLAN, JSON.stringify(plan));
+}
+function loadPlan() {
+  const s = localStorage.getItem(LS_KEY_PLAN);
+  if (!s) return [];
+  try { return JSON.parse(s) ?? []; } catch { return []; }
+}
+
+/** ====== ネットから最新データを取る（アップデート対応） ====== */
+async function fetchLatestRecipes() {
+  setStatus(true, "最新レシピを取得中…（ネットが必要です）");
+  const res = await fetch(RECIPES_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error("ネットから取れませんでした");
+  const json = await res.json();
+  // 形チェック（最低限）
+  if (!Array.isArray(json) || !json.length) throw new Error("データの形が変です");
+  return json;
+}
+
+function formatTime(ms) {
+  try {
+    const d = new Date(ms);
+    return d.toLocaleString("ja-JP");
+  } catch { return ""; }
+}
+
+async function init(tryOnlineFirst = false) {
+  // 1) まず保存済みがあればそれで表示（オフラインでも動く）
+  const cached = loadDataFromLocalStorage();
+  const savedTime = getSavedTime();
+  if (cached) {
+    data = cached;
+    renderCategories();
+    setStatus(true, `保存データで表示中（保存日時: ${savedTime ? formatTime(savedTime) : "不明"}）`);
+  } else {
+    setStatus(false, "保存データなし。ネットで最新を取得します。");
+  }
+
+  // 2) 献立も復元
+  plan = loadPlan();
+  renderPlan();
+  renderSummary();
+
+  // 3) ネットで最新を試す（レシピ追加にも対応）
+  //    tryOnlineFirst=true のときは「必ずネット取得」を優先
+  if (tryOnlineFirst || !cached) {
+    try {
+      const latest = await fetchLatestRecipes();
+      data = latest;
+      saveDataToLocalStorage(latest);
+      renderCategories();
+      setStatus(true, `✅ 最新データに更新しました（取得: ${formatTime(Date.now())}）`);
+      renderPlan();
+      renderSummary();
+    } catch (e) {
+      console.error(e);
+      if (cached) {
+        setStatus(false, "ネット取得に失敗。でも保存データで動いています（オフラインかも）");
+      } else {
+        setStatus(false, "ネット取得に失敗。下の「貼り付け」から読み込んでね。");
+      }
+    }
+  }
+}
+
+/** ====== イベント ====== */
+categorySel.addEventListener("change", renderRecipeOptions);
+
+$("#add").addEventListener("click", () => {
+  if (!data.length) { alert("まだレシピが読み込めていないよ！"); return; }
+  const catIdx = Number(categorySel.value);
+  const recIdx = Number(recipeSel.value);
+  const cat = data[catIdx];
+  const recipe = cat?.recipes?.[recIdx];
+  if (!cat || !recipe) return;
+
+  const times = Math.max(1, Math.min(99, Number(timesInput.value || 1)));
+  plan.push({ cat: normalizeCategoryTitle(cat.title), recipeName: recipe.name, times });
+  renderPlan();
+  renderSummary();
+  savePlan();
+});
+
+$("#clearAll").addEventListener("click", () => {
+  if (!confirm("献立を全てクリアしますか？")) return;
+  plan = [];
+  renderPlan();
+  renderSummary();
+  savePlan();
+});
+
+$("#copy").addEventListener("click", () => {
+  copySummary().catch(() => alert("コピーに失敗（許可が必要な場合があります）"));
+});
+$("#download").addEventListener("click", downloadCSV);
+
+$("#refresh").addEventListener("click", () => init(true));
+
+$("#clearCache").addEventListener("click", () => {
+  if (!confirm("保存したレシピデータと献立を消します。いい？")) return;
+  localStorage.removeItem(LS_KEY_DATA);
+  localStorage.removeItem(LS_KEY_DATA_TIME);
+  localStorage.removeItem(LS_KEY_PLAN);
+  alert("消しました。ページを開き直してね。");
+});
+
+$("#loadPaste").addEventListener("click", () => {
+  const t = $("#pasteArea").value.trim();
+  if (!t) { alert("貼り付けが空っぽだよ"); return; }
+  try {
+    const json = JSON.parse(t);
+    if (!Array.isArray(json) || !json.length) throw new Error("形が変");
+    data = json;
+    saveDataToLocalStorage(json);
+    renderCategories();
+    setStatus(true, "✅ 貼り付けから読み込みOK（保存しました）");
+  } catch (e) {
+    console.error(e);
+    alert("JSONの読み込みに失敗したよ");
+    setStatus(false, "貼り付け読み込みに失敗");
+  }
+});
+
+// 起動：保存データでまず表示 → そのあとネットで最新を取得
+init(false);
+</script>
+</body>
+</html>
